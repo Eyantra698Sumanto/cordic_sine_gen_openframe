@@ -355,6 +355,255 @@ The testbench demonstrates how CORDIC iteratively converges to the correct trigo
 9. [CORDIC Algorithm - Wikipedia](https://en.wikipedia.org/wiki/CORDIC)  
 10. [FPGA4Student - CORDIC in Verilog](https://www.fpga4student.com/)  
 
+
+## 🧠 Design Architecture
+
+```
+CPU (Microwatt)
+      |
+Wishbone Bus
+      |
+[ CORDIC Accelerator ]
+      ├─ Input angle register
+      ├─ Output sine register
+      ├─ Output cosine register
+      └─ Control/status
+```
+
+### 🗺 Memory Map
+| Address | Register | Description |
+|--------|---------|------------|
+| `0xC0000000` | CORDIC_ANGLE | Input angle (fixed‑point) |
+| `0xC0000008` | CORDIC_SIN | Output sine value |
+| `0xC0000010` | CORDIC_COS | Output cosine value |
+
+---
+## 🔬 MICROWATT ON LINUX 
+#### What is Microwatt?
+You probably know already :)  
+IBM recently made their POWER ISA open-sourced with a very liberal license. OpenPOWER Foundation joined the Linux Foundation in August 2019 and in the same month Microwatt was released to the community.  
+Microwatt is a VHDL2008-based POWER ISA 3.0 core, originally written by Anton Blanchard, supporting Linux, MicroPython and Zephyr RTOS.  
+It is also supported in FuseSoC for quick simulation and FPGA bring-up!  
+
+---
+
+#### Installation on Ubuntu 20.04  
+> (Note that if you are on a different Ubuntu release, there might be small changes needed here and there)  
+
+1. Create a directory wherever you like:  
+   ```bash
+   mkdir /home/$USER/uwatt
+   cd /home/$USER/uwatt
+   ```
+2. Download PowerPC cross toolchain:
+
+```bash
+wget https://toolchains.bootlin.com/downloads/releases/toolchains/powerpc64le-power8/tarballs/powerpc64le-power8--glibc--stable-2020.02-2.tar.bz2
+tar -xvf powerpc64le-power8--glibc--stable-2020.02-2.tar.bz2
+export PATH=$PATH:/home/$USER/uwatt/powerpc64le-power8--glibc--stable-2020.02-2/bin
+export CROSS_COMPILE=powerpc64le-linux-
+```
+3. Build MicroPython:
+
+```bash
+
+git clone https://github.com/micropython/micropython.git
+cd micropython/ports/powerpc
+sudo apt install make
+make -j$(nproc)
+cd ../../../
+```
+5. Build GHDL from source:
+
+```bash
+
+sudo apt install llvm clang gnat zlib1g-dev
+wget http://archive.ubuntu.com/ubuntu/pool/universe/g/gnat-4.9/gnat-4.9-base_4.9.3-3ubuntu5_amd64.deb
+wget http://archive.ubuntu.com/ubuntu/pool/universe/g/gnat-4.9/libgnat-4.9_4.9.3-3ubuntu5_amd64.deb
+sudo dpkg -i ./gnat-4.9-base_4.9.3-3ubuntu5_amd64.deb
+sudo dpkg -i ./libgnat-4.9_4.9.3-3ubuntu5_amd64.deb
+git clone https://github.com/ghdl/ghdl.git
+cd ghdl
+mkdir -p /home/$USER/uwatt/ghdl_build
+mkdir build && cd build
+../configure --with-llvm-config --prefix=/home/$USER/uwatt/ghdl_build
+make
+make install
+cd ../../
+export PATH=$PATH:/home/$USER/uwatt/ghdl_build/bin
+```
+6. Build Microwatt:
+
+```bash
+git clone https://github.com/antonblanchard/microwatt
+cd microwatt
+make
+```
+
+7. Link MicroPython image:
+
+```bash
+
+ln -s micropython/firmware.bin main_ram.bin
+```
+
+8.Run Microwatt! (By sending output logs to /dev/null you can suppress output)
+
+```bash
+./core_tb > /dev/null
+(Optional)
+```
+10. Run bare-metal C code on Microwatt!
+
+Change directory:
+
+```bash
+cd ~/uwatt/microwatt/hello_world
+wget https://pastebin.com/raw/2WdH5Z4d -O Makefile
+make
+./core_tb > /dev/null
+```
+
+
+## 🛠️ Clone & Environment Setup
+
+```bash
+git clone https://github.com/Eyantra698Sumanto/cordic_sine_gen_openframe
+cd cordic_sine_gen_openframe
+```
+
+### Install Microwatt dependencies
+```bash
+sudo apt install ghdl gnat python3 make gcc powerpc64le-linux-gnu-gcc
+```
+
+---
+
+## 🧪 Standalone CORDIC Simulation
+
+### Compile
+```bash
+ghdl -a --std=08 cordic/*.vhdl cordic_tb.vhdl
+ghdl -e --std=08 cordic_tb
+```
+
+### Run
+```bash
+ghdl -r cordic_tb --vcd=cordic.vcd
+gtkwave cordic.vcd
+```
+
+
+---
+
+## 🧩 Microwatt Integration Steps
+
+### Clone Microwatt
+```bash
+git clone https://github.com/antonblanchard/microwatt
+cd microwatt
+```
+
+### Add CORDIC files
+```
+microwatt/
+ └─ rtl/
+     ├─ cordic.vhdl
+     ├─ cordic_pkg.vhdl
+     └─ soc.vhdl (modified)
+```
+
+### Edit `soc.vhdl` to map CORDIC
+Added Wishbone slave entry & decoder logic near IO region.
+
+---
+
+## 🛠 Build Microwatt
+```bash
+make clean
+make
+```
+---
+
+## 🧪 C Test to Validate CORDIC
+
+File: `hello_world/cordic_test.c`
+
+```c
+#include <stdint.h>
+#include "console.h"
+
+#define CORDIC_BASE 0xC0000000
+#define CORDIC_ANGLE (*(volatile uint64_t *)(CORDIC_BASE + 0x00))
+#define CORDIC_SIN   (*(volatile uint64_t *)(CORDIC_BASE + 0x08))
+#define CORDIC_COS   (*(volatile uint64_t *)(CORDIC_BASE + 0x10))
+
+void print_fixed(int64_t v) {
+    print_decimal(v >> 32);
+}
+
+int main() {
+    print_text("CORDIC Test Start\n");
+
+    CORDIC_ANGLE = 0x6487ED51; // ~1 rad
+    for(int i=0;i<20;i++);
+
+    print_text("sin = "); print_fixed(CORDIC_SIN); print_char('\n');
+    print_text("cos = "); print_fixed(CORDIC_COS); print_char('\n');
+
+    while(1);
+}
+```
+
+### Compile C Program
+
+```bash
+cd hello_world
+make
+```
+
+---
+
+## 🧪 Full SoC Simulation
+
+```bash
+ghdl -a --std=08 *.vhdl
+ghdl -e --std=08 cordic_soc_tb
+ghdl -r cordic_soc_tb --vcd=cordic_soc.vcd
+```
+
+Waveform placeholder:  
+`![soc waveform](docs/soc_waveform.png)`
+
+---
+
+## 📎 Files to Upload as Proof
+
+| File | Proof |
+|---|---|
+| RTL files | Hardware work |
+| C program | Firmware integration |
+| Simulation logs | Correct accelerator behavior |
+| VCD + screenshots | Waveform proof |
+| commit diffs | Real code integration |
+| boot logs | Microwatt running with accelerator |
+
+---
+
+## 🎥 Future Work
+- FPGA flashing & UART automated trig prints
+- Add instructions instead of MMIO
+- Benchmark speedup vs software CORDIC
+
+---
+
+## 📘 Learning Outcome & Importance of Microwatt in OpenPOWER Ecosystem
+
+Participating in the OpenPOWER Hackathon provided a hands-on opportunity to deeply understand the POWER ISA and the OpenPOWER ecosystem. Working with Microwatt — a fully open-source, Linux-capable POWER core — allowed me to explore real processor internals, custom hardware integration workflows, and embedded acceleration pipelines. Unlike theoretical CPU learning, Microwatt enabled real architectural experimentation: decoding instructions, modifying execution units, adding a custom CORDIC accelerator, and testing it through actual RTL + bare-metal software. This experience significantly enhanced my understanding of open ISAs, hardware-software co-design, custom IP integration, and RISC microarchitecture. The POWER ISA’s clean, extensible architecture helped me appreciate how instruction sets evolve to support advanced compute workloads. Overall, this hackathon strengthened my skills in digital design, system architecture, and open-source hardware tools — reinforcing how platforms like Microwatt democratize processor innovation and accelerate learning for silicon design enthusiasts.
+
+
+---
+
 ---
 
 ## 💻 Contributors
